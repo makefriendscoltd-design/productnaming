@@ -2,28 +2,31 @@ require("dotenv").config();
 const express = require("express");
 const axios = require("axios");
 const path = require("path");
-const Anthropic = require("@anthropic-ai/sdk");
+const { GoogleGenerativeAI } = require("@google/generative-ai");
 
 const app = express();
 app.use(express.json());
 app.use(express.static(path.join(__dirname, "public")));
 
-const NAVER_CLIENT_ID = process.env.NAVER_CLIENT_ID;
-const NAVER_CLIENT_SECRET = process.env.NAVER_CLIENT_SECRET;
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+const NAVER_CLIENT_ID = (process.env.NAVER_CLIENT_ID || "").trim();
+const NAVER_CLIENT_SECRET = (process.env.NAVER_CLIENT_SECRET || "").trim();
+const genAI = new GoogleGenerativeAI((process.env.GEMINI_API_KEY || "").trim());
 
 const STOP_WORDS = new Set(["무료배송", "공식", "정품", "행사", "쿠폰"]);
-const NAVER_HEADERS = {
-  "X-Naver-Client-Id": NAVER_CLIENT_ID,
-  "X-Naver-Client-Secret": NAVER_CLIENT_SECRET,
-};
+
+function getNaverHeaders() {
+  return {
+    "X-Naver-Client-Id": NAVER_CLIENT_ID,
+    "X-Naver-Client-Secret": NAVER_CLIENT_SECRET,
+  };
+}
 
 // --- 네이버 API 헬퍼 ---
 
 async function searchNaverShopping(query, display = 100) {
   const res = await axios.get("https://openapi.naver.com/v1/search/shop.json", {
     params: { query, display, start: 1, sort: "sim" },
-    headers: NAVER_HEADERS,
+    headers: getNaverHeaders(),
   });
   return res.data.items || [];
 }
@@ -31,7 +34,7 @@ async function searchNaverShopping(query, display = 100) {
 async function getShoppingTotal(query) {
   const res = await axios.get("https://openapi.naver.com/v1/search/shop.json", {
     params: { query, display: 1, start: 1, sort: "sim" },
-    headers: NAVER_HEADERS,
+    headers: getNaverHeaders(),
   });
   return res.data.total || 0;
 }
@@ -49,7 +52,7 @@ async function getSearchTrends(keywords) {
       timeUnit: "month",
       keywordGroups: keywords.map((k) => ({ groupName: k, keywords: [k] })),
     },
-    { headers: { ...NAVER_HEADERS, "Content-Type": "application/json" } }
+    { headers: { ...getNaverHeaders(), "Content-Type": "application/json" } }
   );
   return res.data.results || [];
 }
@@ -152,15 +155,22 @@ async function getKeywordMetrics(keywordStats, topN = 15) {
   });
 }
 
-// --- Claude 호출 헬퍼 ---
+// --- Gemini 호출 헬퍼 ---
 
-async function callClaude(prompt, maxTokens = 1024) {
-  const message = await anthropic.messages.create({
-    model: "claude-sonnet-4-5-20250929",
-    max_tokens: maxTokens,
-    messages: [{ role: "user", content: prompt }],
+function stripCodeFence(text) {
+  return text.replace(/^```(?:json|markdown)?\s*/i, "").replace(/\s*```\s*$/i, "").trim();
+}
+
+async function callGemini(prompt, maxTokens = 2048) {
+  const model = genAI.getGenerativeModel({
+    model: "gemini-2.5-flash",
+    generationConfig: {
+      maxOutputTokens: maxTokens,
+      thinkingConfig: { thinkingBudget: 0 },
+    },
   });
-  return message.content[0].text.trim();
+  const result = await model.generateContent(prompt);
+  return stripCodeFence(result.response.text());
 }
 
 async function generateSuggestedTitles(analysis) {
@@ -184,7 +194,7 @@ async function generateSuggestedTitles(analysis) {
 반드시 JSON 배열만 반환. 다른 텍스트 없이:
 ["상품명1","상품명2",...,"상품명10"]`;
 
-  const raw = await callClaude(prompt);
+  const raw = await callGemini(prompt);
   try {
     return JSON.parse(raw);
   } catch {
@@ -241,7 +251,7 @@ ${JSON.stringify({ analysis: { ...analysis, keywordMetrics }, suggestedTitles },
 - 말투는 실제 강의하듯, 초보 셀러도 이해할 수 있게 쉽게 설명하되, 방향성은 단호하고 직설적으로.
 - 불필요한 예의 표현은 줄이고, actionable insight에 집중해라.`;
 
-  return await callClaude(prompt, 8000);
+  return await callGemini(prompt, 8000);
 }
 
 // --- 라우트 1: 분석만 ---
