@@ -256,6 +256,11 @@ ${JSON.stringify({ analysis: { ...analysis, keywordMetrics }, suggestedTitles },
 
 // --- 라우트 1: 분석만 ---
 
+// 2026-11-13 운영 종료: 로그인 없이 AI 호출이 가능해 비용이 새는 걸 막으려고 닫음. 되살리려면 이 블록을 지운다.
+app.post(["/generate-titles", "/generate-titles-and-suggest", "/generate-report"], (req, res) => {
+  res.status(410).json({ error: "운영 종료된 서비스입니다." });
+});
+
 app.post("/generate-titles", async (req, res) => {
   try {
     const { productName } = req.body;
